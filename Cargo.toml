@@ -1,0 +1,8 @@
+[package]
+name = "launcher"
+version = "0.1.0"
+edition = "2024"
+authors = ["Andy Robertson-Baizon <andy@bzn.sh>"]
+
+[dependencies]
+rune = { git = "https://github.com/anomalyco/rune", rev = "53c7f60f51ce12bd5da53145d9d86ce1552324e4" }

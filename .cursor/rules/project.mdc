@@ -1,0 +1,40 @@
+---
+description: Launcher project context — stack, goals, and hard constraints
+alwaysApply: true
+---
+
+# Launcher
+
+XDG app launcher for Linux. Lists `.desktop` apps, filters by name, launches with Enter or click, quits on Escape. Does **not** close on focus loss (focus-follows-mouse would kill it). Gear or Ctrl+, opens layout settings; Ctrl+P pins/unpins. Wayland app_id / X11 class and config folder: `sh.bzn.launcher`.
+
+| Path | Purpose |
+|---|---|
+| `$XDG_CONFIG_HOME/sh.bzn.launcher/settings` | Layout (`key=value`) |
+| `$XDG_CONFIG_HOME/sh.bzn.launcher/pinned` | Pinned `.desktop` filenames |
+| `$XDG_STATE_HOME/sh.bzn.launcher/usage` | Launch counts |
+
+Empty query: pins first (pin order), then most-launched, then alphabetical.
+
+## Stack
+
+- Rust (edition 2024), single binary in `src/main.rs`
+- UI via [Rune](https://github.com/anomalyco/rune) (`rune` git dep — pin by rev in `Cargo.toml`)
+- Build / shell via Nix flake (`flake.nix`); runtime needs Wayland/X11 + Vulkan libs (wrapped in the package)
+
+## Constraints
+
+- Stay a fast, borderless, always-on-top launcher — not a general desktop shell
+- Prefer one file until complexity forces a split; don't invent modules early
+- Match existing density: short functions, few comments, purposeful ones only
+- Launch with argv + `process_group(0)` (no shell); apps must outlive the launcher
+- Parse `Exec` per the Desktop Entry spec; never pass it through `sh -c`
+- Respect XDG: first `applications` dir wins for duplicate `.desktop` names
+- Settings / pinned / usage stay simple text files — keep parse/save compatible
+- Don't close on focus loss
+
+## Verify
+
+```bash
+nix build
+nix develop -c cargo test
+```

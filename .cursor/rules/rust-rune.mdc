@@ -1,0 +1,39 @@
+---
+description: Rust + Rune UI patterns for this launcher
+globs: "**/*.rs"
+alwaysApply: false
+---
+
+# Rust / Rune
+
+## Style
+
+- Dense, readable Rust — collapse trivial helpers; keep non-obvious intent in a one-line doc comment
+- Prefer `Option` / early return over nested `if`; use `let Some(...) else { return }`
+- Name UI element keys stably (`"query"`, `"app-{i}"`, `"set-{name}"`) — scroll/focus depend on them
+- After button clicks that steal focus, restore `query.focused = true`
+
+## Rune UI
+
+- Build trees with `col` / `row` / `el` / `text` / `text_input` / `spacer`
+- Theme via `tok::theme` / `tok::accent`; fonts via `type_::BODY` / `LABEL` / `TITLE`
+- Keyboard: handle in `on_input_key` on the search field; Escape and Ctrl+, are reserved
+- Grid vs list: Up/Down move by row via `row_step` / `rows` (pins get their own rows); Left/Right only in grid
+- Result highlight is one absolutely positioned element; keep `row_h` / `DIVIDER_H` in sync with layout
+- App rows: `role("button")` + `on_press_tx` to select and launch; restore `query.focused`
+- Icons: `ImageCache` at largest size (48); fallback is a gradient circle + initial
+
+## Desktop entries / launch
+
+```rust
+// ❌ BAD — shell out, or whitespace-split Exec
+Command::new("sh").args(["-c", &exec])
+
+// ✅ GOOD — exec_args() per the Desktop Entry spec; Command::new(argv[0]).args(&argv[1..]).process_group(0)
+// Skip NoDisplay/Hidden/non-Application; trim spaces around `=`; Terminal=true wraps in $TERMINAL / xdg-terminal-exec -e
+```
+
+## Tests
+
+- Unit-test pure parse/settings/argv helpers under `#[cfg(test)]` in the same file
+- Failed `start` may touch the filesystem (missing binary); don't spawn GUI in tests

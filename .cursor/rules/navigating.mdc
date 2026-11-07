@@ -1,0 +1,23 @@
+---
+description: Prefer rg and fd when searching the filesystem
+alwaysApply: true
+---
+
+# Navigating
+
+When searching the repo from a shell:
+
+- Use `rg` (ripgrep), never `grep`
+- Use `fd`, never `find`
+
+Examples:
+
+```bash
+# ❌ BAD
+grep -rn "ImageCache" .
+find . -name "*.rs"
+
+# ✅ GOOD
+rg "ImageCache"
+fd -e rs
+```

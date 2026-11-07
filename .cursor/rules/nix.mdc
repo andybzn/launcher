@@ -1,0 +1,24 @@
+---
+description: Nix flake build and runtime wrapping for the launcher
+globs: "**/*.{nix,lock}"
+alwaysApply: false
+---
+
+# Nix
+
+## Package
+
+- `rustPlatform.buildRustPackage` with `cargoLock.allowBuiltinFetchGit = true` (Rune is a git dep)
+- Keep `postFixup` `wrapProgram`: Vulkan/Wayland/X11/fontconfig on `LD_LIBRARY_PATH`
+- `nativeBuildInputs`: `makeWrapper`, `pkg-config`
+- `buildInputs`: at least `fontconfig`, `libxkbcommon`
+
+## Dev shell
+
+- `inputsFrom` the package so link libs stay available; add `cargo` / `rustc`
+
+## Don't
+
+- Don't drop the runtime wrap — winit/wgpu dlopen those libs
+- Don't vendor Rune into the flake; pin via `Cargo.toml` rev + lockfile
+- Prefer `nixpkgs-unstable` channel URL already in `flake.nix` unless there's a reason to change
