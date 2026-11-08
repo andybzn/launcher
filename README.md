@@ -66,10 +66,32 @@ Settings panel (gear / Ctrl+,): list vs grid, icon size, show/hide names, compac
 
 ## Develop
 
+Prerequisites: [Nix](https://nixos.org/download/) and [devenv](https://devenv.sh/getting-started/) (`nix profile install nixpkgs#devenv`).
+
+`devenv shell` provides Rust, Cargo, rustfmt, clippy, ripgrep (`rg`), and fd (`fd`), plus the same native libraries the package links and dlopens (`deps.nix`). Wayland or X11 is required to open the window.
+
 ```bash
-nix develop
-cargo run
+devenv shell
+cargo build
 cargo test
+cargo run
+rg --version
+fd --version
 ```
 
-Runtime wrap in the flake puts Vulkan/Wayland/X11 libs on `LD_LIBRARY_PATH` — keep that if you change the package.
+`devenv test` runs `cargo fmt --all -- --check`, clippy, and `cargo test`:
+
+```bash
+devenv test
+```
+
+`cargo fmt --check` fails on the current `src/main.rs`. Rustfmt would reflow that dense file, so the source was left as it is. Clippy and `cargo test` pass. Clippy prints two existing warnings.
+
+`nix develop` is the flake shell (Cargo and the package's link libraries). `nix build` still produces the wrapped binary for `x86_64-linux` and `aarch64-linux`:
+
+```bash
+nix build
+./result/bin/launcher
+```
+
+Runtime wrap in the flake puts Vulkan/Wayland/X11 libs on `LD_LIBRARY_PATH` — keep that if you change the package. The pinned nixpkgs tarball in `devenv.yaml` is the revision locked in `flake.lock`.

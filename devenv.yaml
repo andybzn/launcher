@@ -1,0 +1,5 @@
+# yaml-language-server: $schema=https://devenv.sh/devenv.schema.json
+inputs:
+  nixpkgs:
+    # Resolved revision of the nixpkgs-unstable channel pinned in flake.lock.
+    url: tarball+https://releases.nixos.org/nixpkgs/nixpkgs-26.11pre1109744.4fe25e12eb9f/nixexprs.tar.zst
