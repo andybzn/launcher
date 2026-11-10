@@ -2,6 +2,8 @@
 
 XDG app launcher for Linux. Lists `.desktop` apps, filter by name, Enter or click to launch, Escape to quit.
 
+![launcher](docs/screenshot.png)
+
 Built with [Rune](https://github.com/anomalyco/rune). Borderless, always-on-top, transparent window with a centred card. Does not close on focus loss (focus-follows-mouse would kill it otherwise).
 
 ## Keys
