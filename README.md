@@ -97,3 +97,10 @@ nix build
 ```
 
 Runtime wrap in the flake puts Vulkan/Wayland/X11 libs on `LD_LIBRARY_PATH` — keep that if you change the package. The pinned nixpkgs tarball in `devenv.yaml` is the revision locked in `flake.lock`.
+
+---
+
+> [!Note]
+>
+> |![AI:X](https://raw.githubusercontent.com/NamtaoProductions/0rwx.com/refs/heads/main/static/50x50/AI-X-50x50.png) | [AI:X](http://0rwx.com) - Written with Claude & Cursor, but Human verified |
+> |------|-----|
