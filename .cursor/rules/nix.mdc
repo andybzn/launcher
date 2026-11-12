@@ -15,7 +15,13 @@ alwaysApply: false
 
 ## Dev shell
 
-- `inputsFrom` the package so link libs stay available; add `cargo` / `rustc`
+- Flake (`nix develop`): `inputsFrom` the package so link libs stay available; add `cargo` / `rustc`
+- devenv (`devenv.nix`, `devenv shell` / `devenv test`): the shell for clippy, fmt and coverage
+  - Rust from `rust-overlay` (`languages.rust.channel`), with `llvm-tools-preview` for `cargo-llvm-cov`
+  - Don't switch it to `channel = "nixpkgs"`: nixpkgs rustc's profiler runtime doesn't match its LLVM, so coverage builds crash at exit
+  - Keep it on nightly: only nightly applies `coverage(off)` to `main()`. On stable `main()` counts again and the 99.5% gates fail
+  - `cargo-llvm-cov` keeps `doCheck = false`: its own tests run on nixpkgs rustc in the Nix build and crash there
+  - `enterTest` is the build check: fmt, clippy, then `cargo llvm-cov` with the line and region thresholds
 
 ## Don't
 
