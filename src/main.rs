@@ -14,12 +14,17 @@ use std::{
     env,
     fmt::{self, Write as _},
     fs, io, iter, mem,
-    os::unix::{net::UnixDatagram, process::CommandExt as _},
+    os::unix::{
+        fs::{DirBuilderExt as _, FileTypeExt as _, MetadataExt as _, PermissionsExt as _},
+        net::UnixDatagram,
+        process::CommandExt as _,
+    },
     path::{Path, PathBuf},
     process::Command,
     thread,
 };
 
+use rune::text::advance;
 use rune::tok::{self, TextStyle, type_};
 use rune::{
     App, AppSpec, Color, Cursor, Cx, Cycle, El, Image, ImageCache, Key, KeyEvent, ScrollSpec,
@@ -1283,7 +1288,10 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
         .clip_rounded(radius)
         .child(header.child(gear))
         .child(el().h(1.0).w_full().fill(t.separator));
-    if let Some(e) = &s.error {
+    // The compact card is full with the settings. The error stays in state for the results view.
+    if !s.show_settings
+        && let Some(e) = &s.error
+    {
         card = card.child(
             row().w_full().px(18.0).py(8.0).child(
                 text(e.clone())
@@ -1311,31 +1319,67 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
     if let Some((y, blur, alpha)) = set.shadow_spec() {
         frame = frame.shadow(y, blur, Color::BLACK.alpha(alpha));
     }
-    // A blinking block at the caret, one character wide. Rune gives the caret in window points;
-    // the frame sits centred in the window. It goes in the frame, so a click on it is not "outside".
-    // ponytail: the block covers the character after the caret; draw that character in the card
-    // colour on top if editing mid-query matters.
-    if !s.show_settings
-        && let Some([x, y, _, h]) = cx.caret("query")
-    {
-        let (win_w, win_h) = Settings::window();
-        frame = frame.child(
-            el().key("caret")
-                .absolute(x - (win_w - width) / 2.0, y - (win_h - height) / 2.0)
-                .size(QUERY_FONT.size * 0.55, h)
-                .fill(t.text)
-                .cycle(CARET_BLINK)
-                .a11y_hidden(),
-        );
+    if let Some(caret) = block_caret(s, cx, width, height) {
+        frame = frame.child(caret);
     }
     col().w_full().h_full().center().child(frame)
 }
 
-/// `$XDG_RUNTIME_DIR` when absolute, else `/tmp`. Session-scoped; not under `$HOME`.
-fn runtime_dir(var: Option<String>) -> PathBuf {
-    var.map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
+/// A blinking block at the caret. The glyph it covers is drawn again in the card colour, so a
+/// mid-query caret stays readable. Rune gives the caret in window points; the frame sits centred
+/// in the window. The block is in the frame, so a click on it is not "outside".
+fn block_caret(s: &State, cx: &Cx<State>, card_w: f32, card_h: f32) -> Option<El> {
+    if s.show_settings {
+        return None;
+    }
+    let [caret_x, caret_y, _, caret_h] = cx.caret("query")?;
+    let theme = tok::theme(true);
+    let (win_w, win_h) = Settings::window();
+    let style = QUERY_FONT.lh(26.0);
+    let glyph = caret_glyph(&s.query).map(|ch| ch.to_string());
+    let block_w = glyph
+        .as_deref()
+        .map_or(QUERY_FONT.size * 0.55, |label| advance(label, style).ceil());
+    let mut caret = el()
+        .key("caret")
+        .absolute(
+            caret_x - (win_w - card_w) / 2.0,
+            caret_y - (win_h - card_h) / 2.0,
+        )
+        .size(block_w, caret_h)
+        .fill(theme.text)
+        .cycle(CARET_BLINK)
+        .a11y_hidden();
+    if let Some(label) = glyph {
+        caret = caret.child(text(label).key("caret-glyph").font(style).color(theme.card));
+    }
+    Some(caret)
+}
+
+/// The character a block caret covers: the one after the caret.
+fn caret_glyph(edit: &TextEdit) -> Option<char> {
+    edit.text
+        .get(edit.focus.min(edit.text.len())..)
+        .and_then(|rest| rest.chars().next())
+}
+
+/// `$XDG_RUNTIME_DIR` when absolute. Otherwise `/tmp/launcher-<uid>`, not shared with other users.
+/// The bool is true for that fallback, which has to be checked before the lock or socket is trusted.
+fn runtime_dir(var: Option<&str>, uid: u32) -> (PathBuf, bool) {
+    var.filter(|p| Path::new(p).is_absolute()).map_or_else(
+        || (PathBuf::from(format!("/tmp/launcher-{uid}")), true),
+        |dir| (PathBuf::from(dir), false),
+    )
+}
+
+/// Owner of `path`, following a symlink, or `u32::MAX` when it cannot be statted.
+/// `/proc/self` is a root-owned symlink; its target is this process.
+fn path_owner(path: &Path) -> u32 {
+    fs::metadata(path).map_or(u32::MAX, |meta| meta.uid())
+}
+
+fn current_uid() -> u32 {
+    path_owner(Path::new("/proc/self"))
 }
 
 fn instance_lock_path(dir: &Path) -> PathBuf {
@@ -1362,6 +1406,73 @@ fn instance_lock(path: &Path) -> Result<Option<fs::File>, ()> {
         return Err(());
     }
     Ok(Some(file))
+}
+
+/// `dir` exists, is not a symlink, is owned by `uid`, and is mode 0700. Creates it when absent.
+fn ensure_private_dir(dir: &Path, uid: u32) -> bool {
+    if fs::symlink_metadata(dir).is_err() {
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        builder.mode(0o700);
+        let _: io::Result<()> = builder.create(dir);
+    }
+    let Ok(meta) = fs::symlink_metadata(dir) else {
+        return false;
+    };
+    let ty = meta.file_type();
+    if ty.is_symlink() || !ty.is_dir() || meta.uid() != uid {
+        return false;
+    }
+    if meta.mode() & 0o077 != 0 {
+        return chmod_private(dir);
+    }
+    true
+}
+
+fn chmod_private(dir: &Path) -> bool {
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).is_ok()
+}
+
+/// Absent, or a non-symlink of `kind` owned by `uid`. Anything else is not safe to lock or nudge.
+fn trusted_path(path: &Path, uid: u32, kind: impl Fn(&fs::FileType) -> bool) -> bool {
+    match fs::symlink_metadata(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => true,
+        Ok(meta) => meta.uid() == uid && kind(&meta.file_type()),
+        Err(_) => false,
+    }
+}
+
+/// This process's instance. `Nudge` only when a lock we trust is already held.
+enum Claim {
+    Run {
+        lock: Option<fs::File>,
+        sock: Option<PathBuf>,
+    },
+    Nudge(PathBuf),
+}
+
+/// Take the single-instance lock. An untrusted fallback dir, lock, or socket opens a window
+/// and does not forward the activation token.
+fn claim_instance(dir: &Path, uid: u32, private: bool) -> Claim {
+    let lock_path = instance_lock_path(dir);
+    let sock_path = instance_sock_path(dir);
+    if private
+        && (!ensure_private_dir(dir, uid)
+            || !trusted_path(&lock_path, uid, fs::FileType::is_file)
+            || !trusted_path(&sock_path, uid, fs::FileType::is_socket))
+    {
+        return Claim::Run {
+            lock: None,
+            sock: None,
+        };
+    }
+    match instance_lock(&lock_path) {
+        Ok(lock) => Claim::Run {
+            lock,
+            sock: Some(sock_path),
+        },
+        Err(()) => Claim::Nudge(sock_path),
+    }
 }
 
 /// Compositor focus token from the second process's environment.
@@ -1399,15 +1510,19 @@ fn serve_nudges(sock: UnixDatagram, mut on_nudge: impl FnMut(String) + Send + 's
 /// Only a real window runs this, so coverage leaves it out. The tests cover what it calls.
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn main() {
-    let dir = runtime_dir(env::var("XDG_RUNTIME_DIR").ok());
-    let sock = instance_sock_path(&dir);
-    let Ok(_lock) = instance_lock(&instance_lock_path(&dir)) else {
-        let token = activation_token(
-            env::var("XDG_ACTIVATION_TOKEN").ok(),
-            env::var("DESKTOP_STARTUP_ID").ok(),
-        );
-        let _: bool = send_nudge(&sock, &token);
-        return;
+    let xdg = env::var("XDG_RUNTIME_DIR").ok();
+    let uid = current_uid();
+    let (dir, private) = runtime_dir(xdg.as_deref(), uid);
+    let (_lock, sock) = match claim_instance(&dir, uid, private) {
+        Claim::Nudge(path) => {
+            let token = activation_token(
+                env::var("XDG_ACTIVATION_TOKEN").ok(),
+                env::var("DESKTOP_STARTUP_ID").ok(),
+            );
+            let _: bool = send_nudge(&path, &token);
+            return;
+        }
+        Claim::Run { lock, sock } => (lock, sock),
     };
     // The Wayland app_id / X11 class, so compositor window rules can match it.
     rune::set_app_id(APP_ID);
@@ -1440,7 +1555,9 @@ fn main() {
         })
         .on_focus(on_focus);
         let handle = app.handle();
-        if let Some(listener) = bind_nudge_socket(&sock) {
+        if let Some(path) = sock
+            && let Some(listener) = bind_nudge_socket(&path)
+        {
             serve_nudges(listener, move |token| {
                 if token.is_empty() {
                     handle.focus();
@@ -1468,6 +1585,7 @@ fn main() {
 mod tests {
     use super::*;
     use rune::{Env, Mods, Runtime};
+    use std::os::unix::fs::symlink;
     use std::{process, sync::Arc, sync::mpsc, time::Duration};
 
     /// No test may write the user's real files. Tests that do not save use this folder, which
@@ -1988,8 +2106,9 @@ mod tests {
     }
 
     #[test]
-    fn runtime_paths_use_xdg_runtime_or_tmp() {
-        let run = runtime_dir(Some("/run/user/1000".into()));
+    fn runtime_paths_use_xdg_runtime_or_a_per_user_dir() {
+        let (run, xdg) = runtime_dir(Some("/run/user/1000"), 1000);
+        assert!(!xdg, "an absolute runtime dir stays as it is");
         assert_eq!(
             instance_lock_path(&run),
             PathBuf::from("/run/user/1000/sh.bzn.launcher.lock")
@@ -1998,9 +2117,10 @@ mod tests {
             instance_sock_path(&run),
             PathBuf::from("/run/user/1000/sh.bzn.launcher.sock")
         );
-        let tmp = runtime_dir(Some("relative".into()));
-        assert_eq!(tmp, PathBuf::from("/tmp"), "relative counts as unset");
-        assert_eq!(runtime_dir(None), PathBuf::from("/tmp"));
+        let (tmp, fallback) = runtime_dir(Some("relative"), 1000);
+        assert!(fallback, "relative counts as unset");
+        assert_eq!(tmp, PathBuf::from("/tmp/launcher-1000"));
+        assert_eq!(runtime_dir(None, 5).0, PathBuf::from("/tmp/launcher-5"));
     }
 
     #[test]
@@ -2070,6 +2190,167 @@ mod tests {
             "bind fails without a parent dir"
         );
         let _: io::Result<()> = fs::remove_file(&path);
+        let _: io::Result<()> = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn path_owner_is_this_user_or_max_when_missing() {
+        let dir = temp("uid");
+        let _: io::Result<()> = fs::create_dir_all(&dir);
+        let path = dir.join("f");
+        fs::write(&path, b"").unwrap();
+        assert_eq!(path_owner(&path), current_uid());
+        assert_eq!(
+            path_owner(Path::new("/nonexistent/launcher-uid")),
+            u32::MAX,
+            "an unreadable path is not a real uid"
+        );
+        let _: io::Result<()> = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn private_dir_is_created_0700_and_rejects_what_we_do_not_own() {
+        let dir = temp("private");
+        let uid = current_uid();
+        let created = dir.join("new");
+        assert!(ensure_private_dir(&created, uid), "creates the directory");
+        assert_eq!(
+            fs::symlink_metadata(&created).unwrap().mode() & 0o777,
+            0o700
+        );
+        let open = dir.join("open");
+        let _: io::Result<()> = fs::create_dir_all(&open);
+        fs::set_permissions(&open, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(
+            ensure_private_dir(&open, uid),
+            "a directory we own is tightened"
+        );
+        assert_eq!(fs::symlink_metadata(&open).unwrap().mode() & 0o777, 0o700);
+        fs::set_permissions(&open, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(ensure_private_dir(&open, uid), "already private");
+        assert!(
+            !ensure_private_dir(&open, uid.wrapping_add(1)),
+            "a different owner is not ours"
+        );
+        let file = dir.join("file");
+        fs::write(&file, b"x").unwrap();
+        assert!(!ensure_private_dir(&file, uid), "a file is not a directory");
+        let link = dir.join("link");
+        symlink(&open, &link).unwrap();
+        assert!(!ensure_private_dir(&link, uid), "a symlink is not followed");
+        let blocked = file.join("child");
+        assert!(
+            !ensure_private_dir(&blocked, uid),
+            "cannot create a directory under a file"
+        );
+        assert!(!chmod_private(Path::new("/nonexistent/launcher-chmod")));
+        let _: io::Result<()> = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn trusted_path_rejects_the_wrong_owner_type_or_link() {
+        let dir = temp("trust");
+        let _: io::Result<()> = fs::create_dir_all(&dir);
+        let uid = current_uid();
+        let file = dir.join("f");
+        fs::write(&file, b"x").unwrap();
+        assert!(trusted_path(&file, uid, fs::FileType::is_file));
+        assert!(!trusted_path(&file, uid, fs::FileType::is_socket));
+        assert!(
+            !trusted_path(&file, uid.wrapping_add(1), fs::FileType::is_file),
+            "someone else's file"
+        );
+        assert!(trusted_path(
+            &dir.join("missing"),
+            uid,
+            fs::FileType::is_file
+        ));
+        let link = dir.join("link");
+        symlink(&file, &link).unwrap();
+        assert!(
+            !trusted_path(&link, uid, fs::FileType::is_file),
+            "a symlink is not the file"
+        );
+        let sock = dir.join("s.sock");
+        let _listener = UnixDatagram::bind(&sock).unwrap();
+        assert!(trusted_path(&sock, uid, fs::FileType::is_socket));
+        assert!(!trusted_path(&sock, uid, fs::FileType::is_file));
+        let hidden = dir.join("hidden");
+        let _: io::Result<()> = fs::create_dir_all(&hidden);
+        let inside = hidden.join("f");
+        fs::write(&inside, b"x").unwrap();
+        fs::set_permissions(&hidden, fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(
+            !trusted_path(&inside, uid, fs::FileType::is_file),
+            "a path we cannot stat is not trusted"
+        );
+        fs::set_permissions(&hidden, fs::Permissions::from_mode(0o700)).unwrap();
+        let _: io::Result<()> = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn untrusted_fallback_opens_a_window_instead_of_nudging() {
+        let dir = temp("claim");
+        let _: io::Result<()> = fs::create_dir_all(&dir);
+        let uid = current_uid();
+        let held = |claim: &Claim| {
+            matches!(
+                claim,
+                Claim::Run {
+                    lock: Some(_),
+                    sock: Some(_)
+                }
+            )
+        };
+        let refused = |claim: &Claim| {
+            matches!(
+                claim,
+                Claim::Run {
+                    lock: None,
+                    sock: None
+                }
+            )
+        };
+
+        // The runtime dir is not checked: a loose directory still locks and nudges.
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o777)).unwrap();
+        let first = claim_instance(&dir, uid, false);
+        assert!(held(&first), "the xdg path locks as before");
+        assert!(
+            matches!(claim_instance(&dir, uid, false), Claim::Nudge(_)),
+            "a second start nudges"
+        );
+        drop(first);
+
+        // The fallback refuses a symlink, a foreign owner, and a lock or socket we do not own.
+        let link = dir.join("link");
+        symlink(&dir, &link).unwrap();
+        assert!(refused(&claim_instance(&link, uid, true)), "symlink dir");
+        assert!(
+            refused(&claim_instance(&dir, uid.wrapping_add(1), true)),
+            "dir owned by someone else"
+        );
+        let home = dir.join("home");
+        let ours = claim_instance(&home, uid, true);
+        assert!(held(&ours), "a private dir we create is held");
+        assert_eq!(fs::symlink_metadata(&home).unwrap().mode() & 0o777, 0o700);
+        let sock = instance_sock_path(&home);
+        assert!(
+            matches!(claim_instance(&home, uid, true), Claim::Nudge(path) if path == sock),
+            "a lock we own forwards to our socket"
+        );
+        drop(ours);
+
+        let lock = instance_lock_path(&home);
+        let _: io::Result<()> = fs::remove_file(&lock);
+        symlink(&dir, &lock).unwrap();
+        assert!(refused(&claim_instance(&home, uid, true)), "symlink lock");
+        let _: io::Result<()> = fs::remove_file(&lock);
+        fs::write(instance_sock_path(&home), b"nope").unwrap();
+        assert!(
+            refused(&claim_instance(&home, uid, true)),
+            "a socket that is not ours"
+        );
         let _: io::Result<()> = fs::remove_dir_all(&dir);
     }
 
@@ -2307,11 +2588,84 @@ mod tests {
             (box_y - field_y).abs() < 1.0,
             "box at {box_y}, field at {field_y}"
         );
+        assert!(
+            rt.elements()
+                .iter()
+                .all(|e| e.key.as_deref() != Some("caret-glyph")),
+            "the caret at the end covers no character"
+        );
+        press(&mut rt, Key::Left);
+        let glyph = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("caret-glyph"))
+            .expect("the covered character");
+        assert_eq!(glyph.text.as_deref(), Some("b"));
+        assert_eq!(glyph.text_color, Some(tok::theme(true).card));
+        let (caret, _) = rt.presented("caret").expect("caret");
+        let (ink, _) = rt.presented("caret-glyph").expect("glyph");
+        assert!(
+            ink[0] >= caret[0] - 0.5 && ink[1] >= caret[1] - 0.5,
+            "glyph {ink:?} sits on the block {caret:?}"
+        );
+        press(&mut rt, Key::Left);
+        let covered = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("caret-glyph"))
+            .expect("the covered character");
+        assert_eq!(covered.text.as_deref(), Some("a"));
         click(&mut rt, "gear");
         assert!(rt.find("caret").is_none(), "no caret in the settings");
         let on = |t: f64| CARET_BLINK.sample(t);
         assert!(on(0.2_f64) > 0.99 && on(0.7_f64) < 0.01, "on, then off");
         assert!(on(1.26_f64) > 0.99, "on again in the next period");
+    }
+
+    #[test]
+    fn caret_glyph_is_the_character_after_the_caret() {
+        let mut edit = TextEdit::new("ab");
+        assert!(caret_glyph(&edit).is_none(), "the caret starts at the end");
+        edit.set_caret(1);
+        assert_eq!(caret_glyph(&edit), Some('b'));
+        edit.set_caret(0);
+        assert_eq!(caret_glyph(&edit), Some('a'));
+        edit.text = "é".to_owned();
+        edit.focus = 1;
+        assert!(
+            caret_glyph(&edit).is_none(),
+            "a byte inside a character is not a glyph"
+        );
+    }
+
+    #[test]
+    fn settings_hide_the_launch_error() {
+        let mut rt = launcher(state(Path::new(NO_FILES), &["a"], &[], Settings::default()));
+        press(&mut rt, Key::Enter);
+        let shown = |runtime: &mut Runtime<State>| {
+            runtime.elements().iter().any(|e| {
+                e.text
+                    .as_deref()
+                    .is_some_and(|t| t.starts_with("Could not start"))
+            })
+        };
+        assert!(
+            shown(&mut rt),
+            "the results view shows why the launch failed"
+        );
+        click(&mut rt, "gear");
+        assert!(read(&mut rt, |s| s.error.is_some()), "the error stays");
+        assert!(!shown(&mut rt), "settings hide it");
+        let (_, card_h) = Settings::default().card();
+        let (_, win_h) = Settings::window();
+        let bottom = f32::midpoint(win_h, card_h);
+        let (_, y) = rt.find("credit").expect("credit");
+        assert!(
+            y + FOOTER_H / 2.0 <= bottom + 0.5,
+            "footer stays inside the card"
+        );
+        click(&mut rt, "gear");
+        assert!(shown(&mut rt), "the results view shows the error again");
     }
 
     /// The pointer's shape over the element keyed `key`, moved `dx` across.
