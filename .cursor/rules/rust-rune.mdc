@@ -10,7 +10,7 @@ alwaysApply: false
 
 - Dense, readable Rust — collapse trivial helpers; keep non-obvious intent in a one-line doc comment
 - Prefer `Option` / early return over nested `if`; use `let Some(...) else { return }`
-- Name UI element keys stably (`"query"`, `"app-{i}"`, `"set-{name}"`) — scroll/focus depend on them
+- Name UI element keys stably and uniquely (`"query"`, `"app-{i}"`, `"set-{label}-{name}"`, `"hl-{name}"`) — scroll/focus and tests depend on them
 - After button clicks that steal focus, restore `query.focused = true`
 
 ## Rune UI
@@ -35,5 +35,35 @@ Command::new("sh").args(["-c", &exec])
 
 ## Tests
 
-- Unit-test pure parse/settings/argv helpers under `#[cfg(test)]` in the same file
-- Failed `start` may touch the filesystem (missing binary); don't spawn GUI in tests
+- Tests live under `#[cfg(test)]` in the same file; they also run in the Nix sandbox (`nix build`), so no display, no network, no real `$HOME`
+- After changes: `cargo clippy --all-targets --locked` clean, and `cargo llvm-cov --locked --fail-under-lines 99.5 --fail-under-regions 99.5`
+- Test code meets the same deny lints as app code (no indexing, arithmetic, `as`, `panic!`); only `unwrap`/`expect` are allowed (`clippy.toml`)
+
+### Never touch the user's files
+
+- File paths live in `State.files` (`Files`); app code never builds a config/state path itself
+- Tests that save use `temp("name")` and `state(&dir, …)`; tests that don't save use `Path::new(NO_FILES)`
+- Take environment values as parameters (`data_dirs(Option<String>)`, `terminal(Option<String>)`, `load_apps(&dirs)`); never `env::set_var` in tests (unsafe in 2024, races between test threads)
+- Test apps get `Exec=/nonexistent/<name>` so a launch can't start anything; use `true` for a launch that must succeed
+
+### UI tests
+
+Drive the real view through the headless `rune::Runtime` with the helpers in `mod tests`:
+
+```rust
+let mut rt = launcher(state(&dir, &["a", "b"], &[], Settings::default()));
+press(&mut rt, Key::Down);          // key into the focused search field
+click(&mut rt, "set-Layout-Grid"); // click by element key; settles motion after
+assert_eq!(read(&mut rt, |s| s.picked), 1);
+```
+
+- `click` must let motion settle: a view still fading in takes no clicks
+- Assert behaviour (state, saved files, `rt.find`, `rt.elements()` text), not just that code ran
+- `tx.close_window()` is private to rune; a test can run it but can't check it
+
+### Coverage
+
+- `main()` is the only item excluded: `#[cfg_attr(coverage_nightly, coverage(off))]` — it opens a real window
+- Don't add `coverage(off)` to tested code, and don't trade an uncoverable exit for indexing with an `#[expect]`
+- Every new `?`, `else { return }` or `if let` exit needs a test that takes it, or must be one that can't run
+- Known exits that can't run (index lookups from `matches()` / `wrap()`): `flip_pin`, `row_step`, `show_picked`, `results` — keep this list short; prefer code that has no such exit

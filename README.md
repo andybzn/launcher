@@ -4,7 +4,7 @@ XDG app launcher for Linux. Lists `.desktop` apps, filter by name, Enter or clic
 
 ![launcher](docs/screenshot.png)
 
-Built with [Rune](https://github.com/anomalyco/rune). Borderless, always-on-top, transparent window with a centred card. Does not close on focus loss (focus-follows-mouse would kill it otherwise).
+Built with [Rune](https://github.com/anomalyco/rune). Borderless, always-on-top, transparent window with a centred card. A click outside the card closes it. It also closes on focus loss, so with focus-follows-mouse, use the `stay_focused` rule below, or a pointer move closes it.
 
 ## Keys
 
@@ -42,7 +42,7 @@ hl.window_rule({
   ["float"] = true,         -- tiling would stretch the fixed-size window
   ["center"] = true,
   ["pin"] = true,           -- show on every workspace
-  ["stay_focused"] = true,  -- focus-follows-mouse cannot move focus away
+  ["stay_focused"] = true,  -- focus-follows-mouse cannot move focus away (focus loss closes it)
   ["border_size"] = 0,      -- the card draws its own edge
   ["rounding"] = 0,         -- the card draws its own corners
   ["no_shadow"] = true,     -- the card draws its own shadow
@@ -64,7 +64,7 @@ hl.bind("SUPER + SPACE", hl.dsp.exec_cmd("env TERMINAL=ghostty launcher"))
 | `$XDG_CONFIG_HOME/sh.bzn.launcher/pinned` | Pinned `.desktop` filenames, one per line |
 | `$XDG_STATE_HOME/sh.bzn.launcher/usage` | Launch counts |
 
-Settings panel (gear / Ctrl+,): list vs grid, icon size, show/hide names, compact/tall, corner style, shadow.
+Settings panel (gear / Ctrl+,): list vs grid, icon size, name size, show/hide names, compact/tall, corner style, shadow.
 
 ## Develop
 

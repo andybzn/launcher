@@ -34,7 +34,17 @@ Empty query: pins first (pin order), then most-launched, then alphabetical.
 
 ## Verify
 
+After code changes, run these and fix anything they report — leave no clippy lints, and keep line **and region** coverage at or above 99.5%:
+
 ```bash
 nix build
-nix develop -c cargo test
+cargo clippy --all-targets --locked
+cargo llvm-cov --locked --fail-under-lines 99.5 --fail-under-regions 99.5
 ```
+
+Prefer `devenv test` when available (fmt check + clippy + llvm-cov). Do not treat warnings as acceptable; resolve them.
+
+- `cargo-llvm-cov` and the nightly toolchain it needs live in the **devenv shell** (`devenv shell`), not the flake dev shell
+- New code needs tests in the same change; never lower a threshold to make a change pass
+- Coverage drops suddenly or counts every function twice: `rm -rf target/llvm-cov-target` and rerun (a stale instrumented binary is being read)
+- `cargo llvm-cov --open` shows the uncovered lines and regions

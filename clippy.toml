@@ -1,0 +1,3 @@
+# A test that unwraps fails loudly, which is what a test should do.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

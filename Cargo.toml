@@ -1,8 +1,78 @@
 [package]
 name = "launcher"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Andy Robertson-Baizon <andy@bzn.sh>"]
+description = "XDG app launcher for Linux."
+license = "MIT"
+repository = "https://github.com/andybzn/launcher"
+readme = "README.md"
+keywords = ["launcher", "desktop", "xdg", "wayland"]
+categories = ["gui"]
 
 [dependencies]
 rune = { git = "https://github.com/anomalyco/rune", rev = "53c7f60f51ce12bd5da53145d9d86ce1552324e4" }
+
+[profile.release]
+lto = "fat"
+strip = true
+opt-level = 3
+codegen-units = 1
+
+[lints.rust]
+# cargo-llvm-cov sets this cfg on nightly; see the top of src/main.rs.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
+
+[lints.clippy]
+pedantic   = { level = "deny", priority = -1 }
+nursery    = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+unchecked_time_subtraction = "deny"
+todo = "deny"
+string_slice = "deny"
+panic_in_result_fn = "deny"
+panic = "deny"
+exit = "deny"
+as_conversions = "deny"
+# Restriction lints that fire on this code base, now fixed.
+str_to_string = "deny"
+shadow_unrelated = "deny"
+let_underscore_untyped = "deny"
+default_numeric_fallback = "deny"
+unseparated_literal_suffix = "deny"
+doc_paragraphs_missing_punctuation = "deny"
+unused_trait_names = "deny"
+absolute_paths = "deny"
+# Restriction lints that do not fire yet: guards for new code.
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+use_debug = "deny"
+allow_attributes_without_reason = "deny"
+undocumented_unsafe_blocks = "deny"
+unwrap_in_result = "deny"
+get_unwrap = "deny"
+lossy_float_literal = "deny"
+float_cmp_const = "deny"
+map_err_ignore = "deny"
+mem_forget = "deny"
+rc_buffer = "deny"
+clone_on_ref_ptr = "deny"
+string_add = "deny"
+format_push_string = "deny"
+verbose_file_reads = "deny"
+iter_over_hash_type = "deny"
+if_then_some_else_none = "deny"
+infinite_loop = "deny"
+create_dir = "deny"
+rest_pat_in_fully_bound_structs = "deny"
+missing_assert_message = "deny"
+tests_outside_test_module = "deny"
+# Cargo manifest lints. Duplicate versions come from rune's dependencies, not from this crate.
+cargo = { level = "deny", priority = -1 }
+multiple_crate_versions = "allow"
